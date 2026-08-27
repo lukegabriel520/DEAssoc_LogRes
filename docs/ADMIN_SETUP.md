@@ -32,11 +32,30 @@ SCHEMA will add `_SCHEMA_FEATURES` + `_SCHEMA_RUBRICS` meta tabs and build depar
 4. **Settings → Secrets** → paste TOML like `.streamlit/secrets.toml.example`:
    - `app_password` — shared password for all leads
    - `spreadsheet_id` — from step 2
+   - `template_tab` — optional; defaults to `Sheet1`
    - `[google_service_account]` — every field from the JSON key file  
      Keep `\n` inside `private_key` as escaped newlines.
 5. Save secrets → reboot the app if prompted.
 
-Format **`Sheet1`** (or another tab — set `template_tab` in secrets) with your interview header layout. SCHEMA **duplicates that tab** on first submit for each department (e.g. **Data Engineering**) and appends candidate rows below the header block.
+The preferred TOML shape is the top-level format in `.streamlit/secrets.toml.example`. For local-only development, the code also accepts:
+
+```toml
+app_password = "..."
+
+[google_sheets]
+spreadsheet_id = "..."
+template_tab = "Sheet1"
+service_account_file = "path/to/service-account.json"
+```
+
+Format **`Sheet1`** (or another tab selected by `template_tab`) with the four-row interview layout:
+
+1. Row 1: spacer
+2. Row 2: date banner
+3. Row 3: main column headers beginning with `INTERVIEW TIME`
+4. Row 4: `1st Choice` and `2nd Choice` subheaders
+
+On first submission for a department, SCHEMA validates the master header, duplicates the entire master tab, refreshes the date banner, and atomically appends the candidate after row 4. Existing department tabs are reused. If their header is missing, SCHEMA inserts the canonical header above existing content instead of overwriting candidate rows.
 
 To refresh a department tab: delete it in Google Sheets and submit again — it will be recreated from the master tab. Edit **Sheet1** to change formatting for all future department tabs.
 
@@ -47,6 +66,15 @@ To refresh a department tab: delete it in Google Sheets and submit again — it 
 3. Choose **Data Engineering**.
 4. Submit a dummy candidate with a few boxes checked.
 5. Confirm a new row on the **Data Engineering** tab and rows on `_SCHEMA_FEATURES`.
+
+If configuration is incomplete, the app now stops before the interview screen and names the missing setting. Confirm all of the following:
+
+- Google Sheets API and Google Drive API are enabled.
+- The spreadsheet is shared with the service-account `client_email` as Editor.
+- `spreadsheet_id` is the ID from the spreadsheet URL, not the full URL.
+- `template_tab` exists and does not have the same name as a department sheet.
+- Department IDs and sheet names in `config/departments.json` are unique.
+- Every department's rubric JSON file exists.
 
 ## 5. Rotate password later
 

@@ -48,12 +48,18 @@ That happens only if you edited git files and never clicked **Save to Google She
 
 ## Header looks duplicated on a sheet
 
-**Fix (admin):** Open the tab, delete extra header rows so row 1–2 match:
+The current layout uses four header rows:
 
-`INTERVIEW TIME | NAME | POSITION APPLICATIONS | Meeting Link | Notes | STATUS`  
-with `1st Choice | 2nd Choice` under POSITION APPLICATIONS.
+1. Spacer
+2. Date banner
+3. `INTERVIEW TIME | NAME | POSITION APPLICATIONS | Meeting Link | Notes | STATUS`
+4. `1st Choice | 2nd Choice` under `POSITION APPLICATIONS`
 
-Then submit a new test row.
+Latest builds insert missing header rows above existing content automatically and do not overwrite candidate rows. If an old header is duplicated below row 4, remove only that old header block manually; keep all candidate rows. Then submit a new test candidate.
+
+## Candidate was added in the wrong row
+
+Latest builds append through the table range `A4:G`, so formatting on empty rows does not affect placement. Confirm the app is current, the department tab has the four-row header above, and `template_tab` points to the intended master tab.
 
 ## Google Sheets 429 / Quota exceeded
 
