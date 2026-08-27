@@ -54,6 +54,12 @@ with `1st Choice | 2nd Choice` under POSITION APPLICATIONS.
 
 Then submit a new test row.
 
+## `_SCHEMA_FEATURES` / `_SCHEMA_RUBRICS` tabs empty (no headers)
+
+**Cause:** Older builds used the wrong gspread 6 `update()` argument order, so meta-tab headers were never written.
+
+**Fix:** Update to the latest code and restart Streamlit. Open the app once — it will stamp row 1 automatically. If tabs still look wrong, delete `_SCHEMA_FEATURES` and `_SCHEMA_RUBRICS`, refresh the app, and headers should reappear.
+
 ## FALLBACK banner on the gauge
 
-Weights are invalid or missing. Open Rubric Manager, ensure every weight &gt; 0, Save, Rescore.
+Weights are invalid or missing. Open Rubric Manager, ensure every weight > 0, Save, Rescore.

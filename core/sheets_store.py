@@ -10,6 +10,7 @@ from typing import Any
 
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import rowcol_to_a1
 
 from core.config_loader import TrackConfig, config_hash, parse_config
 from core.scoring_engine import assign_statuses, compute_candidate_score, generate_attribution_notes
@@ -58,6 +59,26 @@ class SheetsStoreError(Exception):
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _row_matches_header(row: list[str], header: list[str]) -> bool:
+    if not row:
+        return False
+    padded = row + [""] * max(0, len(header) - len(row))
+    return padded[: len(header)] == header
+
+
+def _sheet_has_content(values: list[list[str]]) -> bool:
+    return bool(values and any(any(cell.strip() for cell in row) for row in values))
+
+
+def _a1_range(row: int, col_count: int) -> str:
+    return f"A1:{rowcol_to_a1(row, col_count)}"
+
+
+def _ws_update(ws, rows: list[list[Any]], range_name: str) -> None:
+    """gspread 6.x: values first, range_name as keyword."""
+    ws.update(rows, range_name=range_name, raw=False)
 
 
 def credentials_from_secrets(secrets: Any) -> Credentials:
@@ -140,9 +161,13 @@ class SheetsStore:
                 needs_header = False
         if needs_header:
             # Prepend header by inserting rows if data already exists without header
-            if values and any(any(c.strip() for c in row) for row in values):
+            if _sheet_has_content(values):
                 ws.insert_rows([[], []], row=1)
-            ws.update("A1:G2", [DEPT_HEADER_ROW1, DEPT_HEADER_ROW2], raw=False)
+            _ws_update(
+                ws,
+                [DEPT_HEADER_ROW1, DEPT_HEADER_ROW2],
+                _a1_range(2, len(DEPT_HEADER_ROW1)),
+            )
             try:
                 ws.merge_cells("C1:D1")
                 ws.merge_cells("A1:A2")
@@ -153,24 +178,24 @@ class SheetsStore:
             except Exception:
                 pass
 
+    def _ensure_single_row_header(self, ws, header: list[str]) -> None:
+        values = ws.get_all_values()
+        if values and _row_matches_header(values[0], header):
+            return
+        range_name = _a1_range(1, len(header))
+        if not _sheet_has_content(values):
+            _ws_update(ws, [header], range_name)
+            return
+        ws.insert_row(header, index=1)
+
     def ensure_features_tab(self):
         ws = self._get_or_create_ws(FEATURES_TAB, cols=len(FEATURES_HEADER))
-        values = ws.get_all_values()
-        if not values or values[0][: len(FEATURES_HEADER)] != FEATURES_HEADER:
-            if not values:
-                ws.update("A1", [FEATURES_HEADER], raw=False)
-            elif values[0][0] != FEATURES_HEADER[0]:
-                ws.insert_row(FEATURES_HEADER, index=1)
+        self._ensure_single_row_header(ws, FEATURES_HEADER)
         return ws
 
     def ensure_rubrics_tab(self):
         ws = self._get_or_create_ws(RUBRICS_TAB, cols=len(RUBRICS_HEADER))
-        values = ws.get_all_values()
-        if not values or values[0][: len(RUBRICS_HEADER)] != RUBRICS_HEADER:
-            if not values:
-                ws.update("A1", [RUBRICS_HEADER], raw=False)
-            elif values[0][0] != RUBRICS_HEADER[0]:
-                ws.insert_row(RUBRICS_HEADER, index=1)
+        self._ensure_single_row_header(ws, RUBRICS_HEADER)
         return ws
 
     # ---- rubrics ----
@@ -192,10 +217,10 @@ class SheetsStore:
         updated_at = _utcnow_iso()
         for idx, row in enumerate(records, start=2):
             if str(row.get("department", "")).strip() == department_display:
-                ws.update(
-                    f"A{idx}:C{idx}",
+                _ws_update(
+                    ws,
                     [[department_display, updated_at, payload]],
-                    raw=False,
+                    f"A{idx}:C{idx}",
                 )
                 return
         ws.append_row([department_display, updated_at, payload], value_input_option="USER_ENTERED")
