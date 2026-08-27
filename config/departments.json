@@ -1,0 +1,64 @@
+{
+  "departments": [
+    {
+      "id": "ai_automation",
+      "display_name": "AI - Automation",
+      "sheet_name": "AI - Automation",
+      "rubric_file": "ai_automation.json"
+    },
+    {
+      "id": "ai_machine_learning",
+      "display_name": "AI - Machine Learning",
+      "sheet_name": "AI - Machine Learning",
+      "rubric_file": "ai_machine_learning.json"
+    },
+    {
+      "id": "cloud_and_infrastructure",
+      "display_name": "Cloud and Infrastructure",
+      "sheet_name": "Cloud and Infrastructure",
+      "rubric_file": "cloud_and_infrastructure.json"
+    },
+    {
+      "id": "cybersecurity",
+      "display_name": "Cybersecurity",
+      "sheet_name": "Cybersecurity",
+      "rubric_file": "cybersecurity.json"
+    },
+    {
+      "id": "data_engineering",
+      "display_name": "Data Engineering",
+      "sheet_name": "Data Engineering",
+      "rubric_file": "data_engineering.json"
+    },
+    {
+      "id": "game_development",
+      "display_name": "Game Development",
+      "sheet_name": "Game Development",
+      "rubric_file": "game_development.json"
+    },
+    {
+      "id": "iot_robotics",
+      "display_name": "IoT & Robotics",
+      "sheet_name": "IoT & Robotics",
+      "rubric_file": "iot_robotics.json"
+    },
+    {
+      "id": "project_management",
+      "display_name": "Project Management",
+      "sheet_name": "Project Management",
+      "rubric_file": "project_management.json"
+    },
+    {
+      "id": "software_engineering",
+      "display_name": "Software Engineering",
+      "sheet_name": "Software Engineering",
+      "rubric_file": "software_engineering.json"
+    },
+    {
+      "id": "ui_ux",
+      "display_name": "UI/UX",
+      "sheet_name": "UI/UX",
+      "rubric_file": "ui_ux.json"
+    }
+  ]
+}
