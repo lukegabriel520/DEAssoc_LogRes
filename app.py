@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from core.config_loader import TrackConfig, load_department_rubric, parse_config
-from core.departments import Department, get_department, load_departments
+from core.departments import Department, department_display_names, get_department, load_departments
 from core.exporter import export_csv_bytes, export_xlsx_bytes
 from core.scoring_engine import (
     compute_candidate_score,
@@ -19,6 +19,9 @@ from core.scoring_engine import (
 from core.sheets_store import SheetsStore
 
 NavPage = Literal["Interview", "Cohort", "Configure"]
+
+# Bump when SheetsStore session API changes — forces fresh instance after hot reload
+_STORE_VERSION = 3
 
 st.set_page_config(
     page_title="SCHEMA Interview",
@@ -36,12 +39,33 @@ def _secrets_available() -> bool:
         return False
 
 
-def _get_store() -> SheetsStore | None:
-    if st.session_state.get("sheets_store") is not None:
-        return st.session_state.sheets_store
+def _store_is_compatible(store: object) -> bool:
+    return (
+        isinstance(store, SheetsStore)
+        and getattr(store, "_store_version", None) == _STORE_VERSION
+        and hasattr(store, "invalidate_caches")
+        and hasattr(store, "count_department_candidates")
+    )
+
+
+def _invalidate_store_caches(store: SheetsStore | None) -> None:
+    if store is not None and hasattr(store, "invalidate_caches"):
+        store.invalidate_caches()
+
+
+def _get_store(*, force_new: bool = False) -> SheetsStore | None:
+    if force_new:
+        st.session_state.pop("sheets_store", None)
+    store = st.session_state.get("sheets_store")
+    if store is not None and not _store_is_compatible(store):
+        st.session_state.pop("sheets_store", None)
+        store = None
+    if store is not None:
+        return store
     try:
         store = SheetsStore.from_secrets(st.secrets)
         st.session_state.sheets_store = store
+        st.session_state.sheets_last_error = None
         return store
     except Exception as exc:
         st.session_state.sheets_last_error = str(exc)
@@ -49,16 +73,39 @@ def _get_store() -> SheetsStore | None:
         return None
 
 
+def _candidate_count_key(dept: Department) -> str:
+    return f"candidate_count_{dept.id}"
+
+
+def _refresh_candidate_count(dept: Department, store: SheetsStore) -> int:
+    count = store.count_department_candidates(dept.display_name)
+    st.session_state[_candidate_count_key(dept)] = count
+    return count
+
+
+def _candidate_label(dept: Department) -> str:
+    count = st.session_state.get(_candidate_count_key(dept))
+    if count is None:
+        return "Candidate #??"
+    return f"Candidate #{count + 1:02d}"
+
+
 def _load_active_config(dept: Department) -> TrackConfig:
+    cache_key = f"active_rubric_{dept.id}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     store = _get_store()
+    config: TrackConfig | None = None
     if store is not None:
         try:
-            override = store.load_rubric_override(dept.display_name)
-            if override is not None:
-                return override
+            config = store.load_rubric_override(dept.display_name)
         except Exception:
-            pass
-    return load_department_rubric(dept)
+            config = None
+    if config is None:
+        config = load_department_rubric(dept)
+    st.session_state[cache_key] = config
+    return config
 
 
 def _require_auth() -> bool:
@@ -101,14 +148,17 @@ def _department_gate() -> Department | None:
             selected = next(d for d in depts if d.display_name == choice)
             st.session_state.active_department_id = selected.id
             st.session_state.pop("feature_toggles", None)
+            st.session_state.pop(f"candidate_count_{selected.id}", None)
+            st.session_state.pop(f"active_rubric_{selected.id}", None)
             st.rerun()
     return None
 
 
-def _reset_interview_form_state(config: TrackConfig) -> None:
+def _reset_interview_form_state(config: TrackConfig, dept: Department) -> None:
+    tracks = department_display_names()
     st.session_state.candidate_name = ""
-    st.session_state.first_choice = ""
-    st.session_state.second_choice = ""
+    st.session_state.first_choice = dept.display_name if dept.display_name in tracks else (tracks[0] if tracks else "")
+    st.session_state.second_choice = tracks[1] if len(tracks) > 1 else (tracks[0] if tracks else "")
     st.session_state.meeting_link = ""
     st.session_state.qualitative_notes = ""
     st.session_state.feature_toggles = {q.id: False for q in config.all_questions()}
@@ -118,7 +168,7 @@ def _reset_interview_form_state(config: TrackConfig) -> None:
     st.session_state.form_nonce = old_nonce + 1
 
 
-def _init_interview_state(config: TrackConfig) -> None:
+def _init_interview_state(config: TrackConfig, dept: Department) -> None:
     if "feature_toggles" not in st.session_state:
         st.session_state.feature_toggles = {q.id: False for q in config.all_questions()}
     else:
@@ -130,13 +180,19 @@ def _init_interview_state(config: TrackConfig) -> None:
         }
     for key, default in [
         ("candidate_name", ""),
-        ("first_choice", ""),
+        ("first_choice", dept.display_name),
         ("second_choice", ""),
         ("meeting_link", ""),
         ("qualitative_notes", ""),
         ("form_nonce", 0),
     ]:
         st.session_state.setdefault(key, default)
+
+    tracks = department_display_names()
+    if st.session_state.get("first_choice") not in tracks and tracks:
+        st.session_state.first_choice = dept.display_name if dept.display_name in tracks else tracks[0]
+    if st.session_state.get("second_choice") not in tracks and tracks:
+        st.session_state.second_choice = tracks[1] if len(tracks) > 1 else tracks[0]
 
 
 def _sync_features_from_widgets(config: TrackConfig, nonce: int) -> dict[str, int]:
@@ -184,7 +240,9 @@ def _render_score_sidebar(
 
 
 def render_live_interview(dept: Department, config: TrackConfig) -> None:
-    _init_interview_state(config)
+    _init_interview_state(config, dept)
+    if st.session_state.pop("_clear_interview_form", False):
+        _reset_interview_form_state(config, dept)
     store = _get_store()
     nonce = st.session_state.form_nonce
     show_details = st.session_state.get("show_scoring_details", False)
@@ -192,26 +250,34 @@ def render_live_interview(dept: Department, config: TrackConfig) -> None:
     st.header("Interview")
     st.caption(f"{dept.display_name} · {config.term}")
 
+    if msg := st.session_state.pop("last_submit_message", None):
+        st.success(msg)
+
     if store is None:
         st.warning("Google Sheets not connected — submit disabled until secrets are configured.")
         next_id = "Candidate #??"
     else:
-        try:
-            next_id = store.next_candidate_number(dept.display_name)
-        except Exception as exc:
-            next_id = "Candidate #??"
-            st.warning(f"Could not load cohort count: {exc}")
+        count_key = _candidate_count_key(dept)
+        if count_key not in st.session_state:
+            try:
+                _refresh_candidate_count(dept, store)
+            except Exception as exc:
+                st.session_state.sheets_last_error = str(exc)
+        next_id = _candidate_label(dept)
+        if st.session_state.get(_candidate_count_key(dept)) is None:
+            st.caption("Could not load cohort count from Sheets yet.")
 
     col_form, col_score = st.columns([2.4, 1], gap="large")
 
     with col_form:
         st.markdown(f"**{next_id}**")
         st.text_input("Candidate name *", key="candidate_name", placeholder="Full name")
+        tracks = department_display_names()
         c1, c2 = st.columns(2)
         with c1:
-            st.text_input("1st choice track", key="first_choice")
+            st.selectbox("1st choice track *", tracks, key="first_choice")
         with c2:
-            st.text_input("2nd choice track", key="second_choice")
+            st.selectbox("2nd choice track *", tracks, key="second_choice")
         st.text_input("Meeting link", key="meeting_link", placeholder="Optional")
 
         for section in config.sections:
@@ -246,6 +312,11 @@ def render_live_interview(dept: Department, config: TrackConfig) -> None:
             if not name:
                 st.error("Candidate name is required.")
                 return
+            first = (st.session_state.first_choice or "").strip()
+            second = (st.session_state.second_choice or "").strip()
+            if first == second:
+                st.error("1st and 2nd choice must be different departments.")
+                return
             if store is None:
                 st.error("Cannot submit — Google Sheets not connected.")
                 return
@@ -261,8 +332,8 @@ def render_live_interview(dept: Department, config: TrackConfig) -> None:
                 result = store.submit_candidate(
                     department_display=dept.display_name,
                     name=name,
-                    first_choice=(st.session_state.first_choice or "").strip(),
-                    second_choice=(st.session_state.second_choice or "").strip(),
+                    first_choice=first,
+                    second_choice=second,
                     meeting_link=meeting,
                     qualitative_notes=st.session_state.qualitative_notes or "",
                     features=features,
@@ -271,12 +342,23 @@ def render_live_interview(dept: Department, config: TrackConfig) -> None:
                     score_logit=score.logit,
                     score_probability=score.probability,
                 )
-                _reset_interview_form_state(config)
-                st.success(f"Saved **{result['name']}** · Status: **{result['status']}**")
+                st.session_state._clear_interview_form = True
+                st.session_state.last_submit_message = (
+                    f"Saved **{result['name']}** · Status: **{result['status']}**"
+                )
+                count_key = _candidate_count_key(dept)
+                prev = st.session_state.get(count_key)
+                st.session_state[count_key] = (prev if prev is not None else 0) + 1
+                st.session_state.pop(f"active_rubric_{dept.id}", None)
                 st.rerun()
             except Exception as exc:
                 st.session_state.sheets_last_error = str(exc)
-                st.error(f"Submit failed — your answers are still here. {exc}")
+                # Submit may have succeeded before a post-save step failed
+                if "invalidate_caches" in str(exc):
+                    st.session_state.pop("sheets_store", None)
+                    st.warning("Saved, but session was stale — store refreshed. Check your Google Sheet.")
+                else:
+                    st.error(f"Submit failed — your answers are still here. {exc}")
 
     with col_score:
         features = _sync_features_from_widgets(config, nonce)
@@ -317,6 +399,8 @@ def render_cohort(dept: Department, config: TrackConfig) -> None:
                     st.error(str(exc))
         with c2:
             if st.button("Refresh", use_container_width=True):
+                _invalidate_store_caches(store)
+                st.session_state.pop(_candidate_count_key(dept), None)
                 st.rerun()
 
     try:
@@ -493,6 +577,7 @@ def render_configure(dept: Department, config: TrackConfig) -> None:
                     validated = parse_config(built)
                     store.save_rubric_override(dept.display_name, validated)
                     st.session_state.rubric_draft_json = json.dumps(validated.to_dict(), indent=2)
+                    st.session_state[f"active_rubric_{dept.id}"] = validated
                     st.success("Saved to Google Sheets.")
                 except Exception as exc:
                     st.error(str(exc))
@@ -536,6 +621,7 @@ def _render_sidebar(dept: Department) -> NavPage:
         st.session_state.pop("active_department_id", None)
         st.session_state.pop("feature_toggles", None)
         st.session_state.pop("rubric_draft_json", None)
+        _invalidate_store_caches(st.session_state.get("sheets_store"))
         st.rerun()
     if st.button("Log out", use_container_width=True):
         for key in list(st.session_state.keys()):
