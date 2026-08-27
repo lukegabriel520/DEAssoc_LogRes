@@ -1,0 +1,97 @@
+{
+  "system_title": "SCHEMA: Scoring Candidates via Heuristic Evaluation Model Architecture",
+  "department": "Software Engineering",
+  "term": "AY 2026-2027",
+  "model_parameters": {
+    "beta_0": -2.0,
+    "top_k_slots": 5,
+    "pass_threshold_probability": 0.65
+  },
+  "sections": [
+    {
+      "section_id": "general",
+      "title": "General Screening Questions",
+      "allocated_time_minutes": 8,
+      "questions": [
+        {
+          "id": "g1_bandwidth",
+          "label": "Workload & Time Triage",
+          "prompt": "Aside from classes, what other commitments do you have, and how do you triage colliding deadlines?",
+          "pass_criteria": "Has a concrete task system (Calendar/Notion); confirms 4+ hrs/week availability.",
+          "fail_criteria": "Vague answers; admits having 3+ major orgs/heavy capstone without a management plan.",
+          "weight": 0.8
+        },
+        {
+          "id": "g2_accountability",
+          "label": "Accountability & Conflict Resolution",
+          "prompt": "Tell us about a time a groupmate was unresponsive or delayed. How did you handle it?",
+          "pass_criteria": "Direct, early communication; clarified blockers; escalated professionally without toxicity.",
+          "fail_criteria": "Stayed silent and did all work alone, or blamed aggressively without resolution.",
+          "weight": 0.7
+        },
+        {
+          "id": "g3_motivation",
+          "label": "SBD Alignment & Motivation",
+          "prompt": "Why did you choose to apply to SBD, and what is one specific thing you want to learn this term?",
+          "pass_criteria": "Names specific technical growth, community building, or project portfolio goals.",
+          "fail_criteria": "Generic answer ('just want experience'); cannot name anything specific about SBD.",
+          "weight": 0.5
+        },
+        {
+          "id": "g4_sync_commitment",
+          "label": "Attendance & Sync Commitment",
+          "prompt": "Can you commit to weekly async updates and attending our scheduled sprint syncs?",
+          "pass_criteria": "Unambiguous 'Yes'; confirms no recurring blackout on team meeting windows.",
+          "fail_criteria": "Hesitant; notes recurring conflicts on core meeting days.",
+          "weight": 0.6
+        }
+      ]
+    },
+    {
+      "section_id": "department",
+      "title": "Software Engineering Specific Questions",
+      "allocated_time_minutes": 10,
+      "questions": [
+        {
+          "id": "d1_domain_intent",
+          "label": "Domain Intent",
+          "prompt": "What drew you to Software Engineering, and what kind of systems do you want to build?",
+          "pass_criteria": "Mentions building reliable software, APIs, apps, testing, or maintainability.",
+          "fail_criteria": "Copy-paste tutorials only; no ownership mindset.",
+          "weight": 1.0
+        },
+        {
+          "id": "d2_systems_logic",
+          "label": "Applied Thinking",
+          "prompt": "Explain a simple feature as inputs, logic, outputs, and edge cases.",
+          "pass_criteria": "Clear decomposition with at least one edge case.",
+          "fail_criteria": "UI description only; no logic/edges.",
+          "weight": 1.2
+        },
+        {
+          "id": "d3_unblocking",
+          "label": "Self-Unblocking & Experimentation",
+          "prompt": "Walk through a bug you fixed. How did you isolate the cause?",
+          "pass_criteria": "Repro, bisect, fix, verify; uses docs/errors.",
+          "fail_criteria": "Changed random lines until it worked.",
+          "weight": 1.1
+        }
+      ]
+    },
+    {
+      "section_id": "final",
+      "title": "Final Impression",
+      "allocated_time_minutes": 3,
+      "questions": [
+        {
+          "id": "f1_conviction",
+          "label": "Conviction & Builder Mindset",
+          "prompt": "Given the self-directed nature of Software Engineering, why are you the right fit to build with us?",
+          "pass_criteria": "Realistic confidence; highlights grit, curiosity, and eagerness to self-study.",
+          "fail_criteria": "Over-promises without backing; expects a classroom lecture format.",
+          "weight": 0.6
+        }
+      ]
+    }
+  ]
+}
