@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import gspread
@@ -14,7 +15,15 @@ from gspread.utils import rowcol_to_a1
 
 from core.config_loader import TrackConfig, config_hash, parse_config
 from core.scoring_engine import assign_statuses, compute_candidate_score, generate_attribution_notes
-from core.sheet_template import DEFAULT_MASTER_TAB, find_data_start_row, format_date_banner
+from core.sheet_template import (
+    DEFAULT_MASTER_TAB,
+    TEMPLATE_DATA_START_ROW,
+    build_format_requests,
+    find_data_start_row,
+    format_date_banner,
+    header_repair_insertions,
+    is_template_formatted,
+)
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -41,6 +50,8 @@ FEATURES_HEADER = [
 ]
 
 RUBRICS_HEADER = ["department", "updated_at", "rubric_json"]
+
+DEPARTMENT_ROW_COLS = 7
 
 T = TypeVar("T")
 
@@ -106,6 +117,54 @@ def credentials_from_secrets(secrets: Any) -> Credentials:
     )
 
 
+def validate_runtime_secrets(secrets: Any, *, require_app_password: bool = True) -> None:
+    """Fail early with actionable messages for incomplete Streamlit secrets."""
+    errors: list[str] = []
+    if require_app_password:
+        app_password = str(secrets.get("app_password", "")).strip()
+        if not app_password:
+            errors.append("app_password is missing")
+        elif app_password == "change-me-before-pitch":
+            errors.append("app_password still uses the example placeholder")
+
+    try:
+        spreadsheet_id = spreadsheet_id_from_secrets(secrets).strip()
+        if not spreadsheet_id or spreadsheet_id == "YOUR_GOOGLE_SHEET_ID_HERE":
+            errors.append("spreadsheet_id is missing or still uses the example placeholder")
+        elif "docs.google.com" in spreadsheet_id or "/" in spreadsheet_id:
+            errors.append("spreadsheet_id must be the ID only, not the spreadsheet URL")
+    except SheetsStoreError as exc:
+        errors.append(str(exc))
+
+    if "google_service_account" in secrets:
+        info = dict(secrets["google_service_account"])
+        required = ("type", "project_id", "private_key", "client_email", "token_uri")
+        missing = [key for key in required if not str(info.get(key, "")).strip()]
+        if missing:
+            errors.append(f"[google_service_account] is missing: {', '.join(missing)}")
+        elif info["type"] != "service_account":
+            errors.append("[google_service_account].type must be 'service_account'")
+    else:
+        google_sheets = secrets.get("google_sheets", {})
+        service_account_file = (
+            google_sheets.get("service_account_file")
+            if hasattr(google_sheets, "get")
+            else None
+        )
+        if not service_account_file:
+            errors.append(
+                "Google credentials are missing; configure [google_service_account] "
+                "or google_sheets.service_account_file"
+            )
+        elif not Path(str(service_account_file)).expanduser().is_file():
+            errors.append(f"service_account_file does not exist: {service_account_file}")
+
+    if not master_tab_from_secrets(secrets):
+        errors.append("template_tab must not be blank")
+    if errors:
+        raise SheetsStoreError("Invalid configuration: " + "; ".join(errors))
+
+
 def spreadsheet_id_from_secrets(secrets: Any) -> str:
     if "spreadsheet_id" in secrets:
         return str(secrets["spreadsheet_id"])
@@ -120,7 +179,7 @@ def master_tab_from_secrets(secrets: Any) -> str:
         if name:
             return name
     gs = secrets.get("google_sheets")
-    if isinstance(gs, dict) and gs.get("template_tab"):
+    if hasattr(gs, "get") and gs.get("template_tab"):
         return str(gs["template_tab"]).strip()
     return DEFAULT_MASTER_TAB
 
@@ -140,14 +199,17 @@ class SheetsStore:
         self._titles_cache: list[str] | None = None
         self._headers_ok: set[str] = set()
         self._features_table: list[list[str]] | None = None
-        self._store_version = 3
+        self._store_version = 4
 
     @classmethod
     def from_secrets(cls, secrets: Any) -> SheetsStore:
+        validate_runtime_secrets(secrets, require_app_password=False)
         creds = credentials_from_secrets(secrets)
         sid = spreadsheet_id_from_secrets(secrets)
         master_tab = master_tab_from_secrets(secrets)
-        return cls(sid, creds, master_tab_name=master_tab)
+        store = cls(sid, creds, master_tab_name=master_tab)
+        store._ensure_department_headers(store._get_master_tab())
+        return store
 
     def invalidate_caches(self) -> None:
         self._features_table = None
@@ -177,24 +239,80 @@ class SheetsStore:
                 "Create it in your spreadsheet or set template_tab in secrets."
             ) from exc
 
+    def _ensure_department_headers(self, ws: Any) -> None:
+        cache_key = f"department-header:{ws.id}"
+        if cache_key in self._headers_ok:
+            return
+
+        values = _retry_api(ws.get_all_values)
+        insertions = header_repair_insertions(values)
+        inserted_full_header = (
+            len(insertions) == 1
+            and insertions[0][0] == 1
+            and len(insertions[0][1]) == TEMPLATE_DATA_START_ROW - 1
+        )
+        for row_index, rows in insertions:
+            _retry_api(
+                lambda row_index=row_index, rows=rows: ws.insert_rows(
+                    rows,
+                    row=row_index,
+                    value_input_option="USER_ENTERED",
+                    inherit_from_before=False,
+                )
+            )
+
+        if insertions:
+            repaired_values = _retry_api(ws.get_all_values)
+            if not is_template_formatted(repaired_values):
+                raise SheetsStoreError(
+                    f"Could not establish the four-row header on worksheet '{ws.title}'."
+                )
+            if inserted_full_header:
+                requests = build_format_requests(ws.id)
+                _retry_api(lambda: self._ss.batch_update({"requests": requests}))
+
+        self._headers_ok.add(cache_key)
+
     def _duplicate_department_tab(self, sheet_name: str) -> Any:
         if sheet_name == self._master_tab_name:
             raise SheetsStoreError(
                 f"Department tab name cannot match the master layout tab '{self._master_tab_name}'."
             )
         master = self._get_master_tab()
+        self._ensure_department_headers(master)
         new_ws = _retry_api(lambda: master.duplicate(new_sheet_name=sheet_name))
         self.invalidate_titles_cache()
         date_label = format_date_banner()
         _retry_api(lambda: new_ws.update([[date_label]], range_name="A2", raw=False))
+        self._headers_ok.add(f"department-header:{new_ws.id}")
         return new_ws
 
     def ensure_department_tab(self, sheet_name: str):
         if sheet_name in self._sheet_titles():
-            return _retry_api(lambda: self._ss.worksheet(sheet_name))
+            try:
+                ws = _retry_api(lambda: self._ss.worksheet(sheet_name))
+            except gspread.WorksheetNotFound:
+                self.invalidate_titles_cache()
+            else:
+                self._ensure_department_headers(ws)
+                return ws
         ws = self._duplicate_department_tab(sheet_name)
-        self._headers_ok.add(sheet_name)
         return ws
+
+    def _append_department_row(self, ws, row_values: list[Any]) -> None:
+        """Atomically append one candidate below the template header block."""
+        col_count = max(len(row_values), DEPARTMENT_ROW_COLS)
+        padded = list(row_values) + [""] * max(0, col_count - len(row_values))
+        end_column = rowcol_to_a1(1, col_count).rstrip("0123456789")
+        table_range = f"A{TEMPLATE_DATA_START_ROW - 1}:{end_column}"
+        _retry_api(
+            lambda: ws.append_row(
+                padded[:col_count],
+                value_input_option="USER_ENTERED",
+                insert_data_option="INSERT_ROWS",
+                table_range=table_range,
+            )
+        )
 
     def _ensure_single_row_header(self, ws, header: list[str], cache_key: str) -> None:
         if cache_key in self._headers_ok:
@@ -283,7 +401,12 @@ class SheetsStore:
         records = self._parse_feature_records(all_values)
         return [r for r in records if str(r.get("department", "")).strip() == department_display]
 
-    def list_cohort(self, department_display: str) -> list[dict[str, Any]]:
+    def list_cohort(
+        self,
+        department_display: str,
+        *,
+        department_sheet_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         feat_rows = self.list_feature_rows(department_display, force_refresh=True)
         cohort = []
         for row in feat_rows:
@@ -314,7 +437,7 @@ class SheetsStore:
             )
 
         try:
-            dept_ws = self.ensure_department_tab(department_display)
+            dept_ws = self.ensure_department_tab(department_sheet_name or department_display)
             dept_values = _retry_api(dept_ws.get_all_values)
             data_start = find_data_start_row(dept_values)
             note_by_key: dict[tuple[str, str], str] = {}
@@ -340,6 +463,7 @@ class SheetsStore:
         self,
         *,
         department_display: str,
+        department_sheet_name: str,
         name: str,
         first_choice: str,
         second_choice: str,
@@ -356,23 +480,19 @@ class SheetsStore:
         r_hash = config_hash(config)
         temp_status = "Pending"
 
-        dept_ws = self.ensure_department_tab(department_display)
+        dept_ws = self.ensure_department_tab(department_sheet_name)
         feat_ws = self.ensure_features_tab()
 
-        _retry_api(
-            lambda: dept_ws.append_row(
-                [
-                    interview_time,
-                    name,
-                    first_choice,
-                    second_choice,
-                    meeting_link,
-                    notes_text,
-                    temp_status,
-                ],
-                value_input_option="USER_ENTERED",
-            )
-        )
+        dept_row = [
+            interview_time,
+            name,
+            first_choice,
+            second_choice,
+            meeting_link,
+            notes_text,
+            temp_status,
+        ]
+        self._append_department_row(dept_ws, dept_row)
 
         _retry_api(
             lambda: feat_ws.append_row(
@@ -403,6 +523,7 @@ class SheetsStore:
             top_k=config.model_parameters.top_k_slots,
             pass_threshold=config.model_parameters.pass_threshold_probability,
             feat_values=all_values,
+            department_sheet_name=department_sheet_name,
         )
 
         final_status = statuses.get(candidate_key, temp_status)
@@ -421,6 +542,8 @@ class SheetsStore:
         top_k: int,
         pass_threshold: float,
         feat_values: list[list[str]] | None = None,
+        *,
+        department_sheet_name: str | None = None,
     ) -> dict[str, str]:
         feat_ws = self.ensure_features_tab()
         all_values = feat_values if feat_values is not None else self._load_features_table(force=True)
@@ -467,7 +590,7 @@ class SheetsStore:
             r = rows[i]
             lookup[(r[col("interview_time")], r[col("name")])] = new_statuses[j]
 
-        dept_ws = self.ensure_department_tab(department_display)
+        dept_ws = self.ensure_department_tab(department_sheet_name or department_display)
         dept_vals = _retry_api(dept_ws.get_all_values)
         data_start = find_data_start_row(dept_vals)
         if len(dept_vals) >= data_start:
@@ -484,7 +607,13 @@ class SheetsStore:
         self.invalidate_caches()
         return key_to_status
 
-    def rescore_department(self, department_display: str, config: TrackConfig) -> int:
+    def rescore_department(
+        self,
+        department_display: str,
+        config: TrackConfig,
+        *,
+        department_sheet_name: str | None = None,
+    ) -> int:
         feat_ws = self.ensure_features_tab()
         all_values = self._load_features_table(force=True)
         if len(all_values) < 2:
@@ -521,7 +650,7 @@ class SheetsStore:
         if cells:
             _retry_api(lambda: feat_ws.update_cells(cells))
 
-        dept_ws = self.ensure_department_tab(department_display)
+        dept_ws = self.ensure_department_tab(department_sheet_name or department_display)
         dept_vals = _retry_api(dept_ws.get_all_values)
         data_start = find_data_start_row(dept_vals)
         note_cells = []
@@ -541,5 +670,6 @@ class SheetsStore:
             top_k=config.model_parameters.top_k_slots,
             pass_threshold=config.model_parameters.pass_threshold_probability,
             feat_values=all_values,
+            department_sheet_name=department_sheet_name,
         )
         return count

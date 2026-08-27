@@ -9,19 +9,29 @@ import pandas as pd
 import streamlit as st
 
 from core.config_loader import TrackConfig, load_department_rubric, parse_config
-from core.departments import Department, department_display_names, get_department, load_departments
+from core.departments import (
+    Department,
+    department_display_names,
+    get_department,
+    load_departments,
+    validate_departments,
+)
 from core.exporter import export_csv_bytes, export_xlsx_bytes
 from core.scoring_engine import (
     compute_candidate_score,
     generate_attribution_notes,
     sanitize_meeting_link,
 )
-from core.sheets_store import SheetsStore
+from core.sheets_store import (
+    SheetsStore,
+    master_tab_from_secrets,
+    validate_runtime_secrets,
+)
 
 NavPage = Literal["Interview", "Cohort", "Configure"]
 
 # Bump when SheetsStore session API changes — forces fresh instance after hot reload
-_STORE_VERSION = 3
+_STORE_VERSION = 4
 
 st.set_page_config(
     page_title="SCHEMA Interview",
@@ -31,12 +41,16 @@ st.set_page_config(
 )
 
 
-def _secrets_available() -> bool:
+def _configuration_error() -> str | None:
     try:
-        _ = st.secrets["app_password"]
-        return True
-    except Exception:
-        return False
+        validate_runtime_secrets(st.secrets)
+        validate_departments(
+            load_departments(),
+            master_tab_name=master_tab_from_secrets(st.secrets),
+        )
+        return None
+    except Exception as exc:
+        return str(exc)
 
 
 def _store_is_compatible(store: object) -> bool:
@@ -331,6 +345,7 @@ def render_live_interview(dept: Department, config: TrackConfig) -> None:
             try:
                 result = store.submit_candidate(
                     department_display=dept.display_name,
+                    department_sheet_name=dept.sheet_name,
                     name=name,
                     first_choice=first,
                     second_choice=second,
@@ -392,6 +407,7 @@ def render_cohort(dept: Department, config: TrackConfig) -> None:
                         dept.display_name,
                         top_k=top_k,
                         pass_threshold=config.model_parameters.pass_threshold_probability,
+                        department_sheet_name=dept.sheet_name,
                     )
                     st.success("Statuses updated.")
                     st.rerun()
@@ -404,7 +420,10 @@ def render_cohort(dept: Department, config: TrackConfig) -> None:
                 st.rerun()
 
     try:
-        cohort = store.list_cohort(dept.display_name)
+        cohort = store.list_cohort(
+            dept.display_name,
+            department_sheet_name=dept.sheet_name,
+        )
     except Exception as exc:
         st.error(f"Could not load cohort: {exc}")
         return
@@ -589,7 +608,11 @@ def render_configure(dept: Department, config: TrackConfig) -> None:
             else:
                 try:
                     validated = parse_config(built)
-                    n = store.rescore_department(dept.display_name, validated)
+                    n = store.rescore_department(
+                        dept.display_name,
+                        validated,
+                        department_sheet_name=dept.sheet_name,
+                    )
                     st.success(f"Rescored {n} candidate(s).")
                 except Exception as exc:
                     st.error(str(exc))
@@ -632,9 +655,9 @@ def _render_sidebar(dept: Department) -> NavPage:
 
 
 def main() -> None:
-    if not _secrets_available():
+    if config_error := _configuration_error():
         st.title("SCHEMA")
-        st.error("Secrets missing. See docs/ADMIN_SETUP.md.")
+        st.error(f"{config_error}. See docs/ADMIN_SETUP.md.")
         return
 
     if not _require_auth():
