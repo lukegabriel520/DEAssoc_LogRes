@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -10,8 +11,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-HEADER_FILL = PatternFill("solid", fgColor="1F497D")
+from core.sheet_template import ROW3_VALUES, ROW4_VALUES, format_date_banner
+
+NAVY_FILL = PatternFill("solid", fgColor="1F497D")
+DARK_FILL = PatternFill("solid", fgColor="2C333F")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
+DATE_FONT = Font(color="FFFFFF", bold=True, italic=True)
 STRIPE_FILL = PatternFill("solid", fgColor="F2F2F2")
 STATUS_FILLS = {
     "Top-K Pass": PatternFill("solid", fgColor="C6EFCE"),
@@ -42,43 +47,55 @@ def export_csv_bytes(rows: list[dict[str, Any]]) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
+def _style_header_block(ws) -> None:
+    """Match department sheet layout: 4 header rows, data from row 5."""
+    date_label = format_date_banner(datetime.now(timezone.utc))
+
+    for col in range(1, 8):
+        ws.cell(row=1, column=col).fill = DARK_FILL
+
+    ws["A2"] = date_label
+
+    for col_idx, val in enumerate(ROW3_VALUES, start=1):
+        ws.cell(row=3, column=col_idx, value=val)
+    for col_idx, val in enumerate(ROW4_VALUES, start=1):
+        ws.cell(row=4, column=col_idx, value=val)
+
+    ws.merge_cells("A2:G2")
+    ws.merge_cells("A3:A4")
+    ws.merge_cells("B3:B4")
+    ws.merge_cells("C3:D3")
+    ws.merge_cells("E3:E4")
+    ws.merge_cells("F3:F4")
+    ws.merge_cells("G3:G4")
+
+    date_cell = ws["A2"]
+    date_cell.fill = DARK_FILL
+    date_cell.font = DATE_FONT
+    date_cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    row3_cols = (1, 2, 3, 5, 6, 7)  # skip D3 (merged into C3:D3)
+    for col_idx in row3_cols:
+        cell = ws.cell(row=3, column=col_idx)
+        cell.fill = NAVY_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for col_idx in (3, 4):  # 1st / 2nd choice sub-headers
+        cell = ws.cell(row=4, column=col_idx)
+        cell.fill = NAVY_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
 def export_xlsx_bytes(rows: list[dict[str, Any]]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Cohort"
 
-    # Two-row header matching Google Sheets layout
-    ws.merge_cells("A1:A2")
-    ws.merge_cells("B1:B2")
-    ws.merge_cells("C1:D1")
-    ws.merge_cells("E1:E2")
-    ws.merge_cells("F1:F2")
-    ws.merge_cells("G1:G2")
+    _style_header_block(ws)
 
-    headers_r1 = [
-        ("A1", "INTERVIEW TIME"),
-        ("B1", "NAME"),
-        ("C1", "POSITION APPLICATIONS"),
-        ("E1", "Meeting Link"),
-        ("F1", "Notes"),
-        ("G1", "STATUS"),
-    ]
-    for cell_ref, value in headers_r1:
-        cell = ws[cell_ref]
-        cell.value = value
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws["C2"] = "1st Choice"
-    ws["D2"] = "2nd Choice"
-    for col in ("C", "D"):
-        cell = ws[f"{col}2"]
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    for idx, row in enumerate(rows, start=3):
+    for idx, row in enumerate(rows, start=5):
         values = [
             row.get("interview_time", ""),
             row.get("name", ""),
