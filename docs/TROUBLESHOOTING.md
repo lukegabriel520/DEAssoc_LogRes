@@ -25,6 +25,7 @@ Your interview answers are still on screen. Common causes:
 
 - Sheet not shared with the service account.
 - Wrong `spreadsheet_id`.
+- Master layout tab missing (`Sheet1` or your `template_tab` in secrets).
 - Network blip / API quota.
 
 **Fix:** Admin checks sharing + secrets. Interviewer clicks Submit again (do not retype unless the form cleared).
@@ -53,6 +54,14 @@ That happens only if you edited git files and never clicked **Save to Google She
 with `1st Choice | 2nd Choice` under POSITION APPLICATIONS.
 
 Then submit a new test row.
+
+## Google Sheets 429 / Quota exceeded
+
+**Cause:** Too many read requests (often from rapid checkbox toggles before caching was added).
+
+**Fix:** Restart the app (latest code caches reads). Wait 1 minute if quota was hit, then submit again.
+
+If it persists: avoid opening Cohort and Interview in rapid alternation; use **Refresh** on Cohort only when needed.
 
 ## `_SCHEMA_FEATURES` / `_SCHEMA_RUBRICS` tabs empty (no headers)
 

@@ -22,7 +22,7 @@ You configure Google + Streamlit secrets once. Interviewers only open the URL an
 
 `https://docs.google.com/spreadsheets/d/THIS_IS_THE_ID/edit`
 
-SCHEMA will create/rename department tabs and add `_SCHEMA_FEATURES` + `_SCHEMA_RUBRICS` meta tabs automatically.
+SCHEMA will add `_SCHEMA_FEATURES` + `_SCHEMA_RUBRICS` meta tabs and build department tabs by **duplicating your master layout tab** (`Sheet1` by default — see section 3).
 
 ## 3. Streamlit Community Cloud
 
@@ -35,6 +35,10 @@ SCHEMA will create/rename department tabs and add `_SCHEMA_FEATURES` + `_SCHEMA_
    - `[google_service_account]` — every field from the JSON key file  
      Keep `\n` inside `private_key` as escaped newlines.
 5. Save secrets → reboot the app if prompted.
+
+Format **`Sheet1`** (or another tab — set `template_tab` in secrets) with your interview header layout. SCHEMA **duplicates that tab** on first submit for each department (e.g. **Data Engineering**) and appends candidate rows below the header block.
+
+To refresh a department tab: delete it in Google Sheets and submit again — it will be recreated from the master tab. Edit **Sheet1** to change formatting for all future department tabs.
 
 ## 4. Smoke test
 
