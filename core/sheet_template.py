@@ -54,26 +54,83 @@ def template_value_rows(term_label: str | None = None) -> list[list[str]]:
     ]
 
 
+def find_header_row(values: list[list[str]]) -> int | None:
+    """Return the 1-based row containing the main department header."""
+    for row_index, row in enumerate(values, start=1):
+        if row and str(row[0]).strip().upper() == "INTERVIEW TIME":
+            return row_index
+    return None
+
+
+def header_repair_insertions(values: list[list[str]]) -> list[tuple[int, list[list[str]]]]:
+    """Describe non-destructive row insertions needed for the canonical header."""
+    if is_template_formatted(values):
+        return []
+
+    header_row = find_header_row(values)
+    canonical = template_value_rows()
+    if header_row is None or header_row > 3:
+        return [(1, canonical)]
+
+    insertions: list[tuple[int, list[list[str]]]] = []
+    leading_rows = 3 - header_row
+    if leading_rows:
+        insertions.append((1, canonical[:leading_rows]))
+
+    subheader_index = header_row  # zero-based index of the row after the header
+    has_subheader = (
+        subheader_index < len(values)
+        and len(values[subheader_index]) > 2
+        and str(values[subheader_index][2]).strip() == "1st Choice"
+    )
+    if not has_subheader:
+        insertions.append((4, [list(ROW4_VALUES)]))
+    return insertions
+
+
 def find_data_start_row(values: list[list[str]]) -> int:
     """Return 1-based row index where candidate data begins."""
-    for i, row in enumerate(values):
-        if not row:
-            continue
-        if row[0].strip().upper() == "INTERVIEW TIME":
-            if i + 1 < len(values):
-                next_row = values[i + 1]
-                if len(next_row) > 2 and str(next_row[2]).strip() == "1st Choice":
-                    return i + 3  # 1-based: header at i+1, sub at i+2, data at i+3
-            return i + 2
+    header_row = find_header_row(values)
+    if header_row is not None:
+        next_index = header_row
+        if next_index < len(values):
+            next_row = values[next_index]
+            if len(next_row) > 2 and str(next_row[2]).strip() == "1st Choice":
+                return header_row + 2
+        return header_row + 1
     return TEMPLATE_DATA_START_ROW
 
 
+def find_next_data_row(values: list[list[str]]) -> int:
+    """Return 1-based row index for the next candidate (below header block)."""
+    data_start = find_data_start_row(values)
+    if len(values) < data_start:
+        return data_start
+    last_occupied = data_start - 1
+    for sheet_row_idx, row in enumerate(values[data_start - 1 :], start=data_start):
+        padded = row + [""] * max(0, 7 - len(row))
+        if padded[0].strip() or padded[1].strip():
+            last_occupied = sheet_row_idx
+    return last_occupied + 1
+
+
+def is_data_row(row: list[str]) -> bool:
+    """True if row looks like a candidate record (has interview time or name)."""
+    padded = row + [""] * max(0, 7 - len(row))
+    return bool(padded[0].strip() or padded[1].strip())
+
 def is_template_formatted(values: list[list[str]]) -> bool:
-    """Heuristic: row 3 has INTERVIEW TIME (4-row template layout)."""
-    if len(values) < 3:
+    """True when rows 3–4 contain the canonical two-level header."""
+    if len(values) < 4:
         return False
     row3 = values[2]
-    return bool(row3 and row3[0].strip().upper() == "INTERVIEW TIME")
+    row4 = values[3]
+    return bool(
+        row3
+        and str(row3[0]).strip().upper() == "INTERVIEW TIME"
+        and len(row4) > 2
+        and str(row4[2]).strip() == "1st Choice"
+    )
 
 
 def build_format_requests(sheet_id: int, departments: list[str] | None = None) -> list[dict[str, Any]]:
