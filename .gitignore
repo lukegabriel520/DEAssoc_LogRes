@@ -1,0 +1,13 @@
+.streamlit/secrets.toml
+secrets/
+service_account.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+data/
+.pytest_cache/
+.idea/
+.vscode/
